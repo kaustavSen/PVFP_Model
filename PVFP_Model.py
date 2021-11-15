@@ -345,6 +345,9 @@ def Final_PVFP(t):
         int_rate = BE.Get_Interest_Rate(t+1)
         return (Final_PVFP(t+1) + CF_Net(t+1)) / (1+int_rate)
     
+# Save the model
+mx.write_model(mx.PVFP_Model, "Model")
+
 # Generating and saving output for checking purposes.
 PVFP.Final_PVFP(0)
 PVFP.Final_PVFP.series.sort_index().to_csv("Test.csv")
