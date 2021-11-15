@@ -60,13 +60,12 @@ Assumptions.new_pandas(name="Interest_Rate",
 
 # Probabilities UserSpace to store all the probability calculations
 # This is meant to be used as a "base" class for creating other UserSpaces
-# such as the BE and RES layers.
 Probabilities = mx.new_space("Probabilities")
 
 # Define parameters
-Probabilities.Data = Data
-Probabilities.Assumptions = Assumptions
-Probabilities.Basis = "BE" # can be either BE or RES
+Probabilities.add_bases(Data)
+Probabilities.add_bases(Assumptions)
+Probabilities.Basis = "" # can be either BE or RES
 
 @mx.defcells(Probabilities)
 def Policy_Year(t):
@@ -74,45 +73,45 @@ def Policy_Year(t):
 
 @mx.defcells(Probabilities)
 def Curr_Age(t):
-    age_at_entry = Data.Get_Data_Value("age_at_entry")
+    age_at_entry = Get_Data_Value("age_at_entry")
     return age_at_entry + Policy_Year(t) - 1
 
 @mx.defcells(Probabilities)
 def Ind_Death_Rate(t):
-    sex = Data.Get_Data_Value("sex")
-    mort_factor = Assumptions.Mortality.at[0, Basis]
-    radix_age = max(Assumptions.Mortality_Table.Age)
+    sex = Get_Data_Value("sex")
+    mort_factor = Mortality.at[0, Basis]
+    radix_age = max(Mortality_Table.Age)
     age = radix_age if Curr_Age(t) > radix_age else Curr_Age(t)
-    ann_rate = (Assumptions.Mortality_Table.query(f"Age == {age}")
+    ann_rate = (Mortality_Table.query(f"Age == {age}")
                 .reset_index().at[0, sex]) * mort_factor
     return 1 - (1-ann_rate)**(1/12)
 
 @mx.defcells(Probabilities)
 def Ind_Lapse_Rate(t):
-    prem_freq = Data.Get_Data_Value("prem_freq")
-    max_policy_year = max(Assumptions.Lapse.Policy_Year)
+    prem_freq = Get_Data_Value("prem_freq")
+    max_policy_year = max(Lapse.Policy_Year)
     policy_year = max_policy_year if Policy_Year(t) > max_policy_year else Policy_Year(t)
-    ann_rate = (Assumptions.Lapse.query(f"Policy_Year == {policy_year}")
+    ann_rate = (Lapse.query(f"Policy_Year == {policy_year}")
                 .reset_index().at[0, Basis]) * (t % (12/prem_freq) == 0)
     return 1 - (1-ann_rate)**(1/prem_freq)
 
 @mx.defcells(Probabilities)
 def Prob_Death(t):
-    if t < 0 or t > Data.Get_Data_Value("policy_term") * 12:
+    if t < 0 or t > Get_Data_Value("policy_term") * 12:
         return 0
     else:
         return Prob_IF_E(t-1) * Ind_Death_Rate(t)
 
 @mx.defcells(Probabilities)
 def Prob_Lapse(t):
-    if t < 0 or t > Data.Get_Data_Value("policy_term") * 12:
+    if t < 0 or t > Get_Data_Value("policy_term") * 12:
         return 0
     else:
         return Prob_IF_E(t-1) * (1 - Ind_Death_Rate(t)) * Ind_Lapse_Rate(t)
 
 @mx.defcells(Probabilities)
 def Prob_IF_E(t):
-    if t < 0 or t > Data.Get_Data_Value("policy_term") * 12:
+    if t < 0 or t > Get_Data_Value("policy_term") * 12:
         return 0
     elif t == 0:
         return 1
@@ -125,20 +124,16 @@ def Prob_IF_E(t):
 Cashflows = mx.new_space("Cashflows")
 
 # Define references
-Cashflows.Data = Data
-Cashflows.Assumptions = Assumptions
-Cashflows.Basis = "" # can be either BE or RES
-Cashflows.Probabilities = Probabilities
-Cashflows.Probabilities.Basis = "" # can be either BE or RES
+Cashflows.add_bases(Probabilities)
 
 @mx.defcells(Cashflows)
 def Get_Interest_Rate(t):
-    max_year = Assumptions.Interest_Rate.Year.max()
-    pol_year = max_year if Probabilities.Policy_Year(t) > max_year else Probabilities.Policy_Year(t)
-    if t < 0 or t > Data.Get_Data_Value("policy_term") * 12:
+    max_year = Interest_Rate.Year.max()
+    pol_year = max_year if Policy_Year(t) > max_year else Policy_Year(t)
+    if t < 0 or t > Get_Data_Value("policy_term") * 12:
         return 0
     else:
-        ann_rate = (Assumptions.Interest_Rate
+        ann_rate = (Interest_Rate
                     .query(f"Year == {pol_year}")
                     .reset_index()
                     .at[0, Basis])
@@ -147,9 +142,9 @@ def Get_Interest_Rate(t):
 
 @mx.defcells(Cashflows)
 def Amt_Premiums(t):
-    prem_freq = Data.Get_Data_Value("prem_freq")
-    prem_term = Data.Get_Data_Value("prem_term")
-    annual_prem = Data.Get_Data_Value("annual_prem")
+    prem_freq = Get_Data_Value("prem_freq")
+    prem_term = Get_Data_Value("prem_term")
+    annual_prem = Get_Data_Value("annual_prem")
     
     if t < 0 or t > prem_term * 12:
         return 0
@@ -160,24 +155,24 @@ def Amt_Premiums(t):
     
 @mx.defcells(Cashflows)
 def CF_Premiums(t):
-    return Amt_Premiums(t) * Probabilities.Prob_IF_E(t-1)
+    return Amt_Premiums(t) * Prob_IF_E(t-1)
 
 @mx.defcells(Cashflows)
 def CF_Death_Ben(t):
-    pol_term = Data.Get_Data_Value("policy_term")
+    pol_term = Get_Data_Value("policy_term")
     if t < 0 or t > pol_term * 12:
         return 0
     else:
-        return Data.Get_Data_Value("sum_assured") * Probabilities.Prob_Death(t)
+        return Get_Data_Value("sum_assured") * Prob_Death(t)
 
 @mx.defcells(Cashflows)
 def CF_Init_Exp(t):
-    init_exp_fixed = (Assumptions.Expense
+    init_exp_fixed = (Expense
                       .query("Type == 'Initial_Expense_Per_Policy'")
                       .reset_index()
                       .at[0, Basis])
     
-    init_exp_prem = (Assumptions.Expense
+    init_exp_prem = (Expense
                       .query("Type == 'Initial_Expense_Prem'")
                       .reset_index()
                       .at[0, Basis])
@@ -190,19 +185,19 @@ def CF_Init_Exp(t):
 
 @mx.defcells(Cashflows)
 def CF_Ren_Exp(t):
-    pol_term = Data.Get_Data_Value("policy_term")
+    pol_term = Get_Data_Value("policy_term")
     
-    ren_exp_fixed = (Assumptions.Expense
+    ren_exp_fixed = (Expense
                       .query("Type == 'Renewal_Expense_Per_Policy'")
                       .reset_index()
                       .at[0, Basis])
     
-    ren_exp_prem = (Assumptions.Expense
+    ren_exp_prem = (Expense
                       .query("Type == 'Renewal_Expense_Prem'")
                       .reset_index()
                       .at[0, Basis])
     
-    ann_infl_rate = (Assumptions.Expense
+    ann_infl_rate = (Expense
                       .query("Type == 'Expense_Inflation'")
                       .reset_index()
                       .at[0, Basis])
@@ -213,15 +208,15 @@ def CF_Ren_Exp(t):
     if t < 0 or t > pol_term * 12:
         return 0
     else:
-        return (  ren_exp_fixed / 12 * infl_factor * Probabilities.Prob_IF_E(t-1) 
+        return (  ren_exp_fixed / 12 * infl_factor * Prob_IF_E(t-1) 
                 + ren_exp_prem * CF_Premiums(t))
 
 @mx.defcells(Cashflows)
 def CF_Comm(t):
-    max_pol_year_comm = Assumptions.Commission.Policy_Year.max()
-    pol_year = max_pol_year_comm if Probabilities.Policy_Year(t) > max_pol_year_comm else Probabilities.Policy_Year(t)
+    max_pol_year_comm = Commission.Policy_Year.max()
+    pol_year = max_pol_year_comm if Policy_Year(t) > max_pol_year_comm else Policy_Year(t)
     
-    comm_rate= (Assumptions.Commission
+    comm_rate= (Commission
                 .query(f"Policy_Year == {pol_year}")
                 .reset_index()
                 .at[0, "Commission"])
@@ -232,63 +227,58 @@ def CF_Comm(t):
 BE = mx.new_space("BE")
 
 # Define all references
-# BE.Cashflows = Cashflows
-BE.set_ref("Cashflows", Cashflows, refmode="relative")
-BE.Cashflows.Basis = "BE"
-BE.Cashflows.Probabilities.Basis = "BE"
+BE.add_bases(Cashflows)
+BE.Basis = "BE"
 
 # RES UserSpace to store all the Reserving calculations
 # and finally compute the projected per-policy reserve
 RES = mx.new_space("RES")
 
 # Define all references
-# RES.Cashflows = Cashflows
-RES.set_ref("Cashflows", Cashflows, refmode="relative")
-# RES.Cashflows.Basis = "RES"
-RES.Cashflows.set_ref("Basis", "RES", refmode="relative")
-RES.Cashflows.Probabilities.Basis = "RES"
+RES.add_bases(Cashflows)
+RES.Basis = "RES"
 
 @mx.defcells(RES)
 def CF_Net_BOP(t):
-    pol_term = Cashflows.Data.Get_Data_Value("policy_term")
+    pol_term = Get_Data_Value("policy_term")
     
     if t <= 0 or t > pol_term * 12:
         return 0
     else:
-        return ( Cashflows.CF_Comm(t)
-                + Cashflows.CF_Init_Exp(t)
-                + Cashflows.CF_Ren_Exp(t)
-                - Cashflows.CF_Premiums(t))
+        return (  CF_Comm(t)
+                + CF_Init_Exp(t)
+                + CF_Ren_Exp(t)
+                - CF_Premiums(t))
 
 @mx.defcells(RES)
 def CF_Inv_Income(t):
-    pol_term = Cashflows.Data.Get_Data_Value("policy_term")
+    pol_term = Get_Data_Value("policy_term")
     
     if t <= 0 or t > pol_term * 12:
         return 0
     else:
-        return CF_Net_BOP(t) * Cashflows.Get_Interest_Rate(t)
+        return CF_Net_BOP(t) * Get_Interest_Rate(t)
     
 @mx.defcells(RES)
 def Reserve_IF(t):
-    pol_term = Cashflows.Data.Get_Data_Value("policy_term")
+    pol_term = Get_Data_Value("policy_term")
     
     if t <= 0 or t > pol_term * 12:
         return 0
     else:
         net_cf = (  CF_Net_BOP(t+1)
                   + CF_Inv_Income(t+1)
-                  + Cashflows.CF_Death_Ben(t+1))
-        return (net_cf + Reserve_IF(t+1)) / (1 + Cashflows.Get_Interest_Rate(t+1))
+                  + CF_Death_Ben(t+1))
+        return (net_cf + Reserve_IF(t+1)) / (1 + Get_Interest_Rate(t+1))
     
 @mx.defcells(RES)
 def Reserve_PP(t):
-    pol_term = Cashflows.Data.Get_Data_Value("policy_term")
+    pol_term = Get_Data_Value("policy_term")
     
     if t <= 0 or t > pol_term * 12:
         return 0
     else:
-        return Reserve_IF(t) / Cashflows.Probabilities.Prob_IF_E(t)
+        return Reserve_IF(t) / Prob_IF_E(t)
 
 # PVFP UserSpace for the final calculations pulling in values from both
 # the BE and RES UserSpaces
@@ -298,32 +288,32 @@ PVFP.RES = RES
 
 @mx.defcells(PVFP)
 def Reserve_IF(t):
-    pol_term = BE.Cashflows.Data.Get_Data_Value("policy_term")
+    pol_term = BE.Get_Data_Value("policy_term")
     
     if t <= 0 or t > pol_term * 12:
         return 0
     else:
-        return RES.Reserve_PP(t) * BE.Cashflows.Probabilities.Prob_IF_E(t)
+        return RES.Reserve_PP(t) * BE.Prob_IF_E(t)
 
 @mx.defcells(PVFP)
 def CF_Inv_Income(t):
-    pol_term = BE.Cashflows.Data.Get_Data_Value("policy_term")
+    pol_term = BE.Get_Data_Value("policy_term")
     
     if t <= 0 or t > pol_term * 12:
         return 0
     else:
-        bop_net_cashflows = (  BE.Cashflows.CF_Premiums(t)
-                             - BE.Cashflows.CF_Init_Exp(t)
-                             - BE.Cashflows.CF_Ren_Exp(t)
-                             - BE.Cashflows.CF_Comm(t))
+        bop_net_cashflows = (  BE.CF_Premiums(t)
+                             - BE.CF_Init_Exp(t)
+                             - BE.CF_Ren_Exp(t)
+                             - BE.CF_Comm(t))
         
-        int_rate = BE.Cashflows.Get_Interest_Rate(t)
+        int_rate = BE.Get_Interest_Rate(t)
         inv_income = (bop_net_cashflows + Reserve_IF(t-1)) * int_rate
         return inv_income
         
 @mx.defcells(PVFP)
 def CF_Inc_in_Res(t):
-    pol_term = BE.Cashflows.Data.Get_Data_Value("policy_term")
+    pol_term = BE.Get_Data_Value("policy_term")
     
     if t <= 0 or t > pol_term * 12:
         return 0
@@ -332,28 +322,29 @@ def CF_Inc_in_Res(t):
 
 @mx.defcells(PVFP)
 def CF_Net(t):
-    pol_term = BE.Cashflows.Data.Get_Data_Value("policy_term")
+    pol_term = BE.Get_Data_Value("policy_term")
     
     if t <= 0 or t > pol_term * 12:
         return 0
     else:
-        return (  BE.Cashflows.CF_Premiums(t)
-                - BE.Cashflows.CF_Init_Exp(t)
-                - BE.Cashflows.CF_Ren_Exp(t)
-                - BE.Cashflows.CF_Comm(t)
-                - BE.Cashflows.CF_Death_Ben(t)
+        return (  BE.CF_Premiums(t)
+                - BE.CF_Init_Exp(t)
+                - BE.CF_Ren_Exp(t)
+                - BE.CF_Comm(t)
+                - BE.CF_Death_Ben(t)
                 - CF_Inc_in_Res(t)
-                - CF_Inv_Income(t))
+                + CF_Inv_Income(t))
 
 @mx.defcells(PVFP)
 def Final_PVFP(t):
-    pol_term = BE.Cashflows.Data.Get_Data_Value("policy_term")
+    pol_term = BE.Get_Data_Value("policy_term")
     
     if t < 0 or t > pol_term * 12:
         return 0
     else:
-        int_rate = BE.Cashflows.Get_Interest_Rate(t)
+        int_rate = BE.Get_Interest_Rate(t+1)
         return (Final_PVFP(t+1) + CF_Net(t+1)) / (1+int_rate)
     
-RES.Reserve_PP(239)
+# Generating and saving output for checking purposes.
 PVFP.Final_PVFP(0)
+PVFP.Final_PVFP.series.sort_index().to_csv("Test.csv")
